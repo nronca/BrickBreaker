@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta content="text/html;charset=utf-8" http-equiv="Content-Type">
+	<meta content="utf-8" http-equiv="encoding">
+</head>
+
+<body>
+<canvas id="gameCanvas" tabindex=0 width="800" height="600"></canvas>
+
+<script>
+
+/*
+*
+************** DISCLAIMER ******************
+* This game is based on Chris DeLeon's Javascript programming course
+* It has been modified and added to by Nathan Ronca adding several features that are not in the course
+*
+*
+*/
+
+//ball speeds will be set based on difficulty chosen
+var ballY = 75;
+var ballSpeedX ;
+var ballSpeedY ;
+
+var ballSpeedSlowX ;
+var ballSpeedSlowY ;
+var ballSpeedFastX ;
+var ballSpeedFastY ;
+
+const BRICK_W = 80;
+const BRICK_H = 20; 
+const BRICK_GAP = 2;
+const BRICK_COLS = 10;
+const BRICK_ROWS = 14;
+
+var brickGrid = new Array(BRICK_COLS * BRICK_ROWS);
+var bricksLeft = 0;
+
+const BRICK_EMPTY = -1; //no brick
+const BRICK_REGULAR = 0; //regular brick
+const BRICK_EXPLODE = 1; //takes out all bricks adjacent to it
+const BRICK_POWERUP = 2; //takes out brick behind the one hit
+const BRICK_SPEEDUP = 3; //speeds up ball movement
+const BRICK_INVINCIBLE = 4; //adds a barrier below paddle to prevent a reset
+
+const BRICK_TOTAL_TYPES = 5;
+
+const powerTimer = 5000; //milliseconds
+var invincibleTimer = 0;
+var speedupTimer = 0;
+var powerupTimer = 0;
+
+const PADDLE_WIDTH = 100;
+const PADDLE_THICKNESS = 15; //increased so that the faster ball speed for hard mode would not automatically pass thru the ball
+const PADDLE_DIST_FROM_EDGE = 60;
+var paddleX = 400;
+var superPaddleY;
+
+var canvas, canvasContext;
+
+var mouseX ;
+var mouseY ;
+
+var score = 0;
+var startTime = new Date().getTime();
+var time = 0;
+var currentPowerup = "None";
+var showWinScreen = false;
+var showPauseScreen = false;
+var showStartScreen = false;
+
+var helpTextX = 250;
+var helpTextY = 200;
+
+function updateMousePos(evt) {
+	var rect = canvas.getBoundingClientRect();
+	var root = document.documentElement;
+
+	mouseX = evt.clientX - rect.left - root.scrollLeft;
+	mouseY = evt.clientY - rect.top - root.scrollTop;
+
+	paddleX = mouseX - PADDLE_WIDTH/2;
+
+	//cheat / hack to test ball in any position
+	/*ballX = mouseX;
+	ballY = mouseY;
+	ballSpeedX = 4;
+	ballSpeedY = -4;
+	*/
+
+	return {
+		x:mouseX,
+		y:mouseY
+	};
+}
+
+function handleMouseClick(evt) {
+	if (showWinScreen){
+		showWinScreen = false;
+		brickReset();
+	}
+
+	if (showStartScreen){
+		var clickPos = updateMousePos(evt);
+		//console.log(clickPos.x + ", " + clickPos.y);
+		if (clickPos.x <= (canvas.width / 2)) {
+			//easy mode
+			ballSpeedX = 4;
+			ballSpeedY = 6;
+			ballSpeedSlowX = 4;
+			ballSpeedSlowY = 6;
+			ballSpeedFastX = 4;
+			ballSpeedFastY = 0;
+		} 
+		else {
+			//hard mode
+			ballSpeedX = 6;
+			ballSpeedY = 10;
+			ballSpeedSlowX = 6;
+			ballSpeedSlowY = 10;
+			ballSpeedFastX = 7;
+			ballSpeedFastY = 12;
+		}
+		showStartScreen = false;
+	}
+}
+
+function brickReset() {
+	bricksLeft = 0;
+	score = 0;
+	powerReset(BRICK_POWERUP);
+	powerReset(BRICK_SPEEDUP);
+	powerReset(BRICK_INVINCIBLE);
+
+	var i;
+
+	for(i=0; i< 3 * BRICK_COLS; i++){
+		brickGrid[i] = BRICK_EMPTY;
+	}
+
+	for(; i<BRICK_COLS * BRICK_ROWS; i++) {
+		brickGrid[i] = chooseBrickType();
+		bricksLeft++;
+	} // end of for each brick
+} // end of brickReset func
+
+window.onload = function() {
+	canvas = document.getElementById('gameCanvas');
+	canvasContext = canvas.getContext('2d');
+
+	showStartScreen = true;
+
+	superPaddleY = canvas.height-30;
+	var framesPerSecond = 45;
+	setInterval(updateAll, 1000/framesPerSecond);
+
+	canvas.addEventListener('mousemove', updateMousePos);
+	window.addEventListener('keydown', keyPressed);
+
+	brickReset();
+	ballReset();
+
+	canvas.addEventListener('mousedown', handleMouseClick);
+}
+
+function keyPressed(evt){
+	//evt.preventDefault();
+
+	if (evt.keyCode == 27) {
+		showPauseScreen = !showPauseScreen;
+	}
+}
+
+function updateAll() {
+	time = parseInt((new Date().getTime()-startTime)/1000,10);
+	moveAll();
+	drawAll();
+}
+
+function ballReset() {
+	ballX = canvas.width/2;
+	ballY = canvas.height/2;
+}
+
+function ballMove() {
+	var ballHitSomething = false;
+
+	ballX += ballSpeedX;
+	ballY += ballSpeedY;
+
+	if(ballX < 0 && ballSpeedX < 0.0) { //left
+		ballSpeedX *= -1;
+		ballHitSomething = true;
+	}
+	if(ballX > canvas.width && ballSpeedX > 0.0) { // right
+		ballSpeedX *= -1;
+		ballHitSomething = true;
+	}
+	if(ballY < 0 && ballSpeedY < 0.0) { // top
+		ballSpeedY *= -1;
+		ballHitSomething = true;
+	}
+	if (ballY > superPaddleY && invincibleTimer != 0){ //near bottom but invincible powerup is active
+		ballSpeedY *= -1;
+		ballHitSomething = true;
+	}
+	if(ballY > canvas.height && invincibleTimer == 0) { // bottom
+		ballReset();
+		ballSpeedReset();
+		brickReset();
+	}
+
+	if (ballHitSomething && speedupTimer == -1){
+		ballSpeedReset();
+	}
+}
+
+function ballSpeedReset(){
+	if (ballSpeedX < 0){
+		ballSpeedX = -1 * ballSpeedSlowX;
+	} else {
+		ballSpeedX = ballSpeedSlowX;
+	}
+
+	if (ballSpeedY < 0){
+		ballSpeedY = -1 * ballSpeedSlowY;
+	} else {
+		ballSpeedY = ballSpeedSlowY;
+	}
+
+	speedupTimer = 0; //done resetting ball speed
+	powerDisplayTextUpdate();
+}
+
+function isBrickAtRowCol(col, row) {
+	if(col >= 0 && col < BRICK_COLS &&
+		row >= 0 && row < BRICK_ROWS) {
+			var brickIndexUnderCoord = rowColToArrayIndex(col, row);
+			if (brickGrid[brickIndexUnderCoord] >= 0) {
+				return true;
+			}
+			else {
+				return false;
+			}
+	}
+	else {
+		return false;
+	}
+}
+
+function ballBrickHandling(){
+	var ballBrickCol = Math.floor(ballX / BRICK_W);
+	var ballBrickRow = Math.floor(ballY / BRICK_H);
+	var brickIndexUnderBall = rowColToArrayIndex(ballBrickCol, ballBrickRow);
+
+	if(ballBrickCol >= 0 && ballBrickCol < BRICK_COLS &&
+		ballBrickRow >= 0 && ballBrickRow < BRICK_ROWS) {
+
+		if (isBrickAtRowCol(ballBrickCol,ballBrickRow)) {
+			
+			switch (brickGrid[brickIndexUnderBall]) {
+				case (BRICK_REGULAR):
+					break;
+
+				case (BRICK_EXPLODE):					
+					checkTempBrick(ballBrickCol, ballBrickRow-1);
+					checkTempBrick(ballBrickCol, ballBrickRow+1);
+					checkTempBrick(ballBrickCol-1, ballBrickRow);
+					checkTempBrick(ballBrickCol+1, ballBrickRow);
+					break;
+
+				case (BRICK_POWERUP):
+					currentPowerup = "Power Increase"
+					powerupTimer = BRICK_POWERUP;
+					checkTempBrick(ballBrickCol-1, ballBrickRow);
+					setTimeout(function(){powerReset(powerupTimer);},powerTimer);
+					break;
+
+				case (BRICK_SPEEDUP):
+					currentPowerup = "Speed Increase"
+					speedupTimer = BRICK_SPEEDUP;
+					ballSpeedX = ballSpeedFastX;
+					ballSpeedY = ballSpeedFastY;
+					setTimeout(function() {powerReset(speedupTimer);},powerTimer);
+					break;
+
+				case (BRICK_INVINCIBLE):
+					currentPowerup = "Invincible"
+					invincibleTimer = BRICK_INVINCIBLE;
+					setTimeout(function(){powerReset(invincibleTimer);},powerTimer);
+					break;
+
+				default:
+					break;
+			}
+			
+			if (powerupTimer != 0){
+				checkTempBrick(ballBrickCol, ballBrickRow-1);
+			}
+
+			//now we can get rid of the brick we hit
+			brickGrid[brickIndexUnderBall] = BRICK_EMPTY; 
+			updateScore();
+
+			var prevBallX = ballX - ballSpeedX;
+			var prevBallY = ballY - ballSpeedY;
+			var prevBrickCol = Math.floor(prevBallX / BRICK_W);
+			var prevBrickRow = Math.floor(prevBallY / BRICK_H);
+
+			var bothTestsFailed = true;
+
+			if(prevBrickCol != ballBrickCol) {
+				if(isBrickAtRowCol(prevBrickCol, ballBrickRow) == false){
+					ballSpeedX *= -1;
+					bothTestsFailed = false;
+				}
+			}
+			if(prevBrickRow != ballBrickRow){
+				if(isBrickAtRowCol(ballBrickCol,prevBrickRow) == false){
+					ballSpeedY *=-1;
+					bothTestsFailed = false;
+				}
+			}
+
+			if (bothTestsFailed) { //tests corner case when both adj row col bricks are gone, prevents ball from going straight thru
+				ballSpeedX *=-1;
+				ballSpeedY *=-1;
+			}
+
+			if (speedupTimer == -1) {
+				ballSpeedReset();
+			}
+		}//end of brick found
+	}//end of valid col and row
+
+	if (bricksLeft == 0) {
+		showWinScreen = true;
+	}
+}
+
+function checkTempBrick(brickCol, brickRow){
+	if (isBrickAtRowCol(brickCol, brickRow)){
+		brickGrid[rowColToArrayIndex(brickCol, brickRow)] = BRICK_EMPTY;
+		updateScore();
+	}
+}
+
+function updateScore(){
+	var bonus;
+
+	bonus = 0;
+	if (currentPowerup != ""){
+		bonus = 100; //increase points when a powerup is active
+	}
+	
+	bricksLeft--;
+	score+=(100+bonus);
+}
+
+function powerDisplayTextUpdate(){
+	if(powerupTimer == 0 && speedupTimer == 0 && invincibleTimer == 0) {
+		currentPowerup = "None";
+	}
+}
+
+function powerReset(flag){
+	switch(flag){
+		case (powerupTimer):
+			powerupTimer = 0;
+			break;
+		case (speedupTimer):
+			//ballSpeedX = ballSpeedSlowX; //if i reset this before hitting something the ball angle will suddenly change
+			//ballSpeedY = ballSpeedSlowY;
+			speedupTimer = -1; //signify we need to reset on next collision
+			break;
+		case (invincibleTimer):
+			invincibleTimer = 0;
+			break;
+		default:
+			break;
+	}
+	powerDisplayTextUpdate();
+}
+
+function ballPaddleHandling(){
+	var paddleTopEdgeY = canvas.height-PADDLE_DIST_FROM_EDGE;
+	var paddleBottomEdgeY = paddleTopEdgeY + PADDLE_THICKNESS;
+	var paddleLeftEdgeX = paddleX;
+	var paddleRightEdgeX = paddleLeftEdgeX + PADDLE_WIDTH;
+
+	//console.log('1: ' + (ballY > paddleTopEdgeY));
+	//console.log('2: ' + (ballY < paddleBottomEdgeY));
+	//console.log('3: ' + (ballX > paddleLeftEdgeX));
+	//console.log('4: ' + (ballX < paddleRightEdgeX));
+
+	if( ballY > paddleTopEdgeY && // below the top of paddle
+		ballY < paddleBottomEdgeY && // above bottom of paddle
+		ballX > paddleLeftEdgeX && // right of the left side of paddle
+		ballX < paddleRightEdgeX) { // left of the right side of paddle
+
+		ballSpeedY *= -1;
+
+		var centerOfPaddleX = paddleX+PADDLE_WIDTH/2;
+		var ballDistFromPaddleCenterX = ballX - centerOfPaddleX;
+		ballSpeedX = ballDistFromPaddleCenterX * 0.35;
+
+		if(bricksLeft == 0) {
+			showWinScreen = true;
+		}//out of bricks
+
+		if (speedupTimer == -1) {
+			ballSpeedReset();
+		}
+	}//ball center inside paddle
+}
+
+function moveAll() {
+	if (showWinScreen || showPauseScreen || showStartScreen) {
+		return;
+	}
+	ballMove();
+	ballBrickHandling();
+	ballPaddleHandling();
+}
+
+function rowColToArrayIndex(col, row) {
+	return col + BRICK_COLS * row;
+}
+
+function drawBricks() {
+
+	for(var eachRow=0;eachRow<BRICK_ROWS;eachRow++) {
+		for(var eachCol=0;eachCol<BRICK_COLS;eachCol++) {
+
+			var arrayIndex = rowColToArrayIndex(eachCol, eachRow); 
+
+			if(brickGrid[arrayIndex] >= 0) {
+				colorRect(BRICK_W*eachCol,BRICK_H*eachRow,
+					BRICK_W-BRICK_GAP,BRICK_H-BRICK_GAP, chooseBrickColor(arrayIndex));
+			} // end of is this brick here
+		} // end of for each brick
+	} // end of for each row
+
+} // end of drawBricks func
+
+//only want a certain percentage of non regular bricks to be generated
+function chooseBrickType() {
+	//var rand = 
+	return Math.floor(0 + (BRICK_TOTAL_TYPES - 0) * Math.pow(Math.random(),3));
+	//return rand;
+}
+
+function chooseBrickColor(index) {
+	var ret;
+
+	switch(brickGrid[index]) {
+		case (BRICK_REGULAR):
+			ret = 'blue';
+			break;
+		case (BRICK_EXPLODE):
+			ret = 'red';
+			break;
+		case (BRICK_POWERUP):
+			ret = 'yellow';
+			break;
+		case (BRICK_SPEEDUP):
+			ret = 'green';
+			break;
+		case (BRICK_INVINCIBLE):
+			ret  = 'white';
+			break;
+		default:
+			ret = 'blue'
+			break;
+	} //end switch
+	return ret;
+} //end choose color func
+
+function drawPauseScreen(color, text){
+	colorRect(helpTextX, helpTextY, BRICK_W, BRICK_H, color);
+	canvasContext.fillText(text, helpTextX+BRICK_W+10, helpTextY+15);
+	helpTextY+=50;
+}
+
+function drawAll() {
+	colorRect(0,0, canvas.width,canvas.height, 'black'); // clear screen
+	
+	if (showStartScreen){
+		canvasContext.fillStyle = 'white';
+		canvasContext.fillText("WELCOME TO BRICKBREAKER",300,75);
+		canvasContext.fillText("Click to start.", 350, 90);
+		canvasContext.fillText("Normal?", 250, 150);
+		canvasContext.fillText("Hard?", 500, 150);
+	}
+
+	if (showPauseScreen || showStartScreen){
+		helpTextY = 300;
+
+		canvasContext.fillStyle = 'white';
+		if (showPauseScreen){ 
+			canvasContext.fillText("GAME PAUSED", 345, 100); 
+			canvasContext.fillText("Press F5 to reset.", 345, 120);
+		}
+		canvasContext.fillText("PowerUps Last For " + powerTimer/1000 + " Seconds.",310, helpTextY-50);
+		
+		drawPauseScreen('blue', "- Regular Brick")
+		drawPauseScreen('red',"- Exploding Brick. Destroys All Adjacent Bricks");
+		drawPauseScreen('yellow',"- PowerUp Brick. Destroys Brick Directly Behind It");
+		drawPauseScreen('green',"- SpeedUp Brick. Increases Ball Speed Temporarily");
+		drawPauseScreen('white',"- Invincible Brick. Generates A Wall To Prevent A Loss Temporarily");
+		return;
+	}
+
+	if (showWinScreen) {
+		canvasContext.fillStyle = 'white';
+		canvasContext.fillText("You won!", 390,200);
+		canvasContext.fillText("Score: " + score, 380,250);
+		canvasContext.fillText("Click to continue", 375, 300);
+		return;
+	}
+
+	colorCircle(ballX,ballY, 10, 'white'); // draw ball
+
+	colorRect(paddleX, canvas.height-PADDLE_DIST_FROM_EDGE,
+				PADDLE_WIDTH, PADDLE_THICKNESS, 'white');
+	
+	if (invincibleTimer != 0) {
+		colorRect(0, superPaddleY, canvas.width, PADDLE_THICKNESS, 'white')
+	}
+
+
+	canvasContext.fillStyle = 'white';
+	canvasContext.fillText("Press ESCAPE to Pause",680,10);
+	canvasContext.fillText("Score: " + score, 700,25);
+	canvasContext.fillText("Time: " + time, 25, 25);
+	canvasContext.fillText("PowerUp: " + currentPowerup, 400,25);
+
+	canvasContext.fillStyle = 'black';
+
+	drawBricks();
+
+}
+
+function colorRect(topLeftX,topLeftY, boxWidth,boxHeight, fillColor) {
+	canvasContext.fillStyle = fillColor;
+	canvasContext.fillRect(topLeftX,topLeftY, boxWidth,boxHeight);
+}
+
+function colorCircle(centerX,centerY, radius, fillColor) {
+	canvasContext.fillStyle = fillColor;
+	canvasContext.beginPath();
+	canvasContext.arc(centerX,centerY, 10, 0,Math.PI*2, true);
+	canvasContext.fill();
+}
+
+function colorText(showWords, textX,textY, fillColor) {
+	canvasContext.fillStyle = fillColor;
+	canvasContext.fillText(showWords, textX, textY);
+}
+
+</script>
+
+</body>
+</html>
